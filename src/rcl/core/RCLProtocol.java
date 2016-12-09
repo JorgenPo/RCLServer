@@ -54,6 +54,7 @@ class RCLCommands {
     private Map<String, String> descriptions;
     private PrintWriter out;
     private RCLUser user;
+    private String args;
 
     // Init static functions
     private void initFunctions() {
@@ -89,24 +90,14 @@ class RCLCommands {
         descriptions.put("time", "Displays the current server time.");
 
         functions.put("ls", () -> {
-            try {
-                Process proc = Runtime.getRuntime().exec("ls -l");
-
-                BufferedReader reader = new BufferedReader(
-                        new InputStreamReader(proc.getInputStream()));
-                String line;
-                while ( (line = reader.readLine()) != null ) {
-                    out.println(line);
-                }
-
-                reader.close();
-                proc.waitFor();
-            } catch (Exception e) {
-                out.println(e.getMessage());
-                out.println(e.getMessage());
-            }
+            execNative("ls");
         });
         descriptions.put("ls", "Prints listing of current directory");
+
+        functions.put("view", () -> {
+            execNative("cat");
+        });
+        descriptions.put("view", "View file content");
 
         functions.put("account", () -> {
             out.println("== Account information: ==");
@@ -114,6 +105,9 @@ class RCLCommands {
             out.println(" Last access:    " + user.getLastSession());
             out.println(" Favorite shell: " + "RCL shell <3");
         });
+        descriptions.put("account", "Prints account information");
+
+
     }
 
     public RCLCommands(PrintWriter out, RCLUser user) {
@@ -124,8 +118,16 @@ class RCLCommands {
     }
 
     public void exec(String cmd) {
+        String parts[] = cmd.split(" ");
+
         try {
-            Runnable f = functions.get(cmd);
+            if ( parts.length > 1 ) {
+                args = cmd.substring(cmd.indexOf(" "));
+            } else {
+                args = "";
+            }
+
+            Runnable f = functions.get(parts[0]);
             if ( f == null ) {
                 throw new MethodNotFoundException(cmd);
             }
@@ -133,6 +135,30 @@ class RCLCommands {
             f.run();
         } catch (MethodNotFoundException e) {
             out.println("cmd: " + e.getMessage());
+        }
+    }
+
+    public void execNative(String cmd) {
+        try {
+            if ( !args.isEmpty() ) {
+                cmd += args;
+            }
+
+            Process proc = Runtime.getRuntime().exec(cmd);
+
+            BufferedReader reader = new BufferedReader(
+                    new InputStreamReader(proc.getInputStream()));
+
+            String line;
+            while ( (line = reader.readLine()) != null ) {
+                out.println(line);
+            }
+
+            reader.close();
+            proc.waitFor();
+        } catch (Exception e) {
+            out.println(e.getMessage());
+            out.println(e.getMessage());
         }
     }
 }
