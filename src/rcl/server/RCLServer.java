@@ -1,97 +1,56 @@
 package rcl.server;
 
-import org.w3c.dom.Document;
 import rcl.core.RCLProtocol;
 import rcl.core.RCLUser;
 import rcl.core.exceptions.UserNotFoundException;
-import rcl.core.xml.XMLUtil;
+import rcl.core.RemoteInterface;
 
-import java.io.BufferedReader;
 import java.io.IOException;
-import java.io.InputStreamReader;
-import java.io.PrintWriter;
-import java.net.ServerSocket;
-import java.net.Socket;
-import java.util.ArrayList;
-import java.util.Date;
-import java.util.HashMap;
-import java.util.Map;
+import java.rmi.AlreadyBoundException;
+import java.rmi.Naming;
+import java.rmi.RemoteException;
+import java.rmi.registry.LocateRegistry;
+import java.rmi.server.UnicastRemoteObject;
+import java.util.*;
+import java.util.concurrent.ConcurrentHashMap;
 
-public class RCLServer {
-    private static final String SERVER_VERSION = "1.0";
+public class RCLServer extends UnicastRemoteObject
+        implements RemoteInterface {
+    private static final String SERVER_VERSION = "1.6";
 
-    private  Map<String, RCLUser> users;
-    private  boolean isUsersLoaded = false;
-    private  ServerSocket socket;
-    private  int port;
+    private ConcurrentHashMap<String, RCLUser> users;
+    private ConcurrentHashMap<RCLUser, RCLProtocol> protocols;
+    private boolean isUsersLoaded = false;
+    private int port;
 
-    private  ArrayList<Thread> threads = new ArrayList<>();
+    RCLServer() throws RemoteException {
+
+    }
 
     public static void main(String[] args) throws IOException {
         RCLServer server = new RCLServer();
         server.startup(args);
+
+        try {
+            LocateRegistry.createRegistry(1099);
+
+            Naming.bind("RCL", server);
+
+            System.out.println("Server started on " + server.port + " port!");
+        } catch (AlreadyBoundException e) {
+            System.err.println("Init server exception: " + e.getMessage());
+            e.printStackTrace();
+        }
+
     }
 
     private void startup(String args[]) {
-        BufferedReader sysin = new BufferedReader(
-                new InputStreamReader(System.in));
-
         if (args.length < 2) {
             printUsage();
             return;
         }
 
         parseArgs(args);
-
-        try {
-            socket = new ServerSocket(port);
-        } catch (IOException e) {
-            System.err.println("Cannot create server socket: " + e.getMessage());
-            return;
-        }
-
-        System.out.println(String.format("rcl: server is listening on %d port...", port));
-
-        while (true) {
-            try {
-                if ( sysin.ready() ) {
-                    if (sysin.readLine().equals("shutdown")) {
-                        socket.close();
-                        break;
-                    }
-                }
-            } catch (IOException e) {
-                System.err.println("Input error: " + e.getMessage());
-            }
-
-            Socket client;
-            try {
-                client = socket.accept();   //Waiting for user to connect
-
-
-            } catch (IOException e) {
-                System.err.println("Cannot accept socket connection: " + e.getMessage());
-                continue;
-            }
-
-            System.out.printf("rcl: %s has been connected!\n", client.getInetAddress());
-
-            final Socket clientSocket = client;
-            Thread clientThread = new Thread(() -> processClient(clientSocket));
-
-            threads.add(clientThread);
-
-            clientThread.start();
-        }
-
-        // Waiting for all client threads to finish (?)
-        threads.stream().filter(th -> th != null).forEach(th -> {
-            try {
-                th.join();
-            } catch (InterruptedException e) {
-                e.printStackTrace();
-            }
-        });
     }
 
     private void parseArgs(String[] args) {
@@ -106,130 +65,23 @@ public class RCLServer {
         System.out.println("RCLServer usage: rclserver -p port");
     }
 
-    private void processClient(Socket client) {
-        try (
-                PrintWriter out =
-                        new PrintWriter(client.getOutputStream(), true);
-                BufferedReader in = new BufferedReader(
-                        new InputStreamReader(client.getInputStream()))
-        )
-        {
-            String clientOutBuffer;
-            String clientInBuffer = "";
-
-            boolean isAuthorized = false;
-
-            // Check user and trying to make RCL session
-            while ( !isAuthorized && !client.isClosed()) {
-
-                StringBuilder request = new StringBuilder();
-                // Read line with client name and password
-                while ( !(clientOutBuffer = in.readLine()).equals("EOT") ) {
-                    request.append(clientOutBuffer);
-                    request.append('\n');
-                }
-
-                try {
-                    RCLUser user = checkAuthority(request.toString());
-
-                    RCLProtocol proto = new RCLProtocol(user);
-                    proto.connectTo(client.getOutputStream());
-
-                    out.println(XMLUtil.makeResponse(
-                            String.format("Hello, " + user.getUsername() + "! Last log on "
-                            + user.getLastSession() + ".")));
-                    out.println("EOT");
-
-                    System.out.println(user.getUsername() + " just login");
-                    isAuthorized = true;
-
-                    user.setLastSession(new Date());
-
-                    Document doc = null;
-                    String methodName;
-                    ArrayList<String> params;
-
-                    while ( true ) {
-                        request = new StringBuilder();
-                        while (!(clientInBuffer = in.readLine()).equals("EOT")) {
-                            request.append(clientInBuffer);
-                            request.append('\n');
-                        }
-
-                        doc = XMLUtil.fromXML(request.toString());
-                        methodName = XMLUtil.getFunctionName(doc);
-
-                        if (methodName.equals("rcl.disconnect")) {
-                            client.close();
-                            System.out.printf("rcl: %s has just disconnected!\n", client.getInetAddress());
-                            return;
-                        }
-
-                        params = XMLUtil.getParams(doc);
-                        proto.processInput(methodName, params);
-
-                        if (client.isClosed()) {
-                            System.out.printf("rcl: %s has just disconnected!\n", client.getInetAddress());
-                            return;
-                        }
-                    }
-                } catch (Exception e) {
-                    out.println(XMLUtil.makeResponse(
-                            String.format("rcl error: (%s)", e.getMessage())));
-                    out.println("EOT");
-                }
-            }
-
-        } catch (IOException e) {
-            System.out.printf("rcl: i/o error with socket (%s)", client.getInetAddress());
-            //System.out.printf("rcl: %s has just disconnected!", client.getInetAddress());
-            return;
-        }
-
-        try {
-            client.close();
-        } catch (IOException e) {
-            System.err.println("Cannot close client socket (" + socket.getInetAddress() + ")!");
-            e.printStackTrace();
-        }
-
-        System.out.printf("rcl: %s has just disconnected!\n", client.getInetAddress());
-    }
-
     /**
      * Construct RCL session from given client authority
-     *
-     * @param authority
-     *   Well-known string that prove client authority
-     *
      *   format: username password
      */
-    private RCLUser checkAuthority(String authority)
+    private RCLUser checkAuthority(String username, String password)
             throws Exception {
         if (!isUsersLoaded) {
             loadUsers();
         }
 
-        Document doc = XMLUtil.fromXML(authority);
-
-        if ( doc == null ||
-             !XMLUtil.getFunctionName(doc).equals("rcl.authorize") ) {
-            throw new Exception("Wrong authority format!");
-        }
-
-        ArrayList<String> params = XMLUtil.getParams(doc);
-
-        if ( params.size() < 2 ) {
-            throw new Exception("Wrong authority format!");
-        }
-
-        RCLUser user = users.get(params.get(0));
+        RCLUser user = users.get(username);
 
         if ( user == null ) {
-            throw new UserNotFoundException(params.get(0));
+            throw new UserNotFoundException(username);
         }
 
-        if ( !user.comparePassword(params.get(1)) ) {
+        if ( !user.comparePassword(password) ) {
             throw new Exception("Wrong password!");
         }
 
@@ -238,7 +90,8 @@ public class RCLServer {
 
     //TODO: real load from file
     private void loadUsers() {
-        users = new HashMap<>();
+        users = new ConcurrentHashMap<>();
+        protocols = new ConcurrentHashMap<>();
 
         RCLUser test = new RCLUser("ambulance", "password");
         users.put(test.getUsername(), test);
@@ -247,5 +100,34 @@ public class RCLServer {
         users.put(test2.getUsername(), test2);
 
         isUsersLoaded = true;
+    }
+
+    @Override
+    public String exec(String username, String name, ArrayList<String> params) {
+        RCLUser user;
+
+        if ( (user = users.get(username)).isAuthorized() == false) {
+            return "You should authorize first!";
+        }
+
+        RCLProtocol proto = protocols.get(user);
+        return proto.processInput(name, params);
+    }
+
+    @Override
+    public String authorize(String username, String password) {
+        RCLUser user;
+        try {
+            user = this.checkAuthority(username, password);
+        } catch (Exception e) {
+            return "Authorization failed: " + e.getMessage();
+        }
+
+        user.setAuthorized(true);
+
+        RCLProtocol proto = new RCLProtocol(user);
+        protocols.put(user, proto);
+
+        return "Welcome, " + user.getUsername() + "! Last login: " + user.getLastSession();
     }
 }

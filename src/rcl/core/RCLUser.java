@@ -17,6 +17,8 @@ public class RCLUser {
 
     private Date lastSession;
 
+    private boolean isAuthorized = false;
+
     public RCLUser(String username, String password) {
         cmdHistory = new ArrayList<>();
 
@@ -53,5 +55,13 @@ public class RCLUser {
 
     public String getUsername() {
         return username;
+    }
+
+    public boolean isAuthorized() {
+        return isAuthorized;
+    }
+
+    public void setAuthorized(boolean authorized) {
+        isAuthorized = authorized;
     }
 }

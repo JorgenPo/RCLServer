@@ -1,22 +1,16 @@
 package rcl.core;
 
 import rcl.core.exceptions.MethodNotFoundException;
-import rcl.core.xml.XMLUtil;
 
 import java.io.*;
-import java.rmi.NoSuchObjectException;
-import java.sql.Time;
 import java.time.LocalDateTime;
 import java.util.*;
-import java.util.concurrent.Exchanger;
 
 public class RCLProtocol {
-    private static final String PROTO_VERSION = "1.0";
+    private static final String PROTO_VERSION = "1.4";
 
     private RCLUser user;
     private RCLCommands cmd;
-
-    private PrintWriter userOut;
 
     /**
      * Construct RCL session with user
@@ -24,23 +18,13 @@ public class RCLProtocol {
      */
     public RCLProtocol(RCLUser user) {
         this.user = user;
-    }
-
-    /**
-     * Inject protocol in user <-> server communication
-     * @param out User output character stream
-     */
-    public void connectTo(OutputStream out) {
-        this.userOut = new PrintWriter(out, true);
-
-        // TODO think for optimization
-        cmd = new RCLCommands(userOut, user);
+        cmd = new RCLCommands(user);
     }
 
     // Execute cmd and
-    public void processInput(String methodName, ArrayList<String> params) {
+    public String processInput(String methodName, ArrayList<String> params) {
 
-        cmd.exec(methodName, params);
+        return cmd.exec(methodName, params);
     }
 }
 
@@ -50,7 +34,6 @@ class RCLCommands {
 
     private Map<String, Runnable> functions;
     private Map<String, String> descriptions;
-    private PrintWriter out;
     private RCLUser user;
     private ArrayList<String> args;
     private StringBuilder result;
@@ -110,20 +93,20 @@ class RCLCommands {
 
     }
 
-    public RCLCommands(PrintWriter out, RCLUser user) {
-        this.out = out;
+    public RCLCommands(RCLUser user) {
         this.user = user;
 
         initFunctions();
     }
 
-    public void exec(String method, ArrayList<String> params) {
+    public String exec(String method, ArrayList<String> params) {
 
+        String ret;
         try {
-            if ( params.size() > 0 ) {
-                args = params;
-            } else {
+            if ( params == null ) {
                 args = new ArrayList<>();
+            } {
+                args = params;
             }
 
             Runnable f = functions.get(method);
@@ -132,14 +115,14 @@ class RCLCommands {
             }
 
             f.run();
-            out.println(XMLUtil.makeResponse(result.toString()));
-            out.println("EOT");
+            ret = result.toString();
             result = new StringBuilder();
 
         } catch (MethodNotFoundException e) {
-            out.println(XMLUtil.makeResponse("cmd: " + e.getMessage()));
-            out.println("EOT");
+            ret = "Exec error: " + e.getMessage();
         }
+
+        return ret;
     }
 
     public void execNative(String cmd) {
@@ -166,7 +149,7 @@ class RCLCommands {
             reader.close();
             proc.waitFor();
         } catch (Exception e) {
-            out.println(e.getMessage() + "\n");
+            result.append(e.getMessage() + "\n");
         }
     }
 }
