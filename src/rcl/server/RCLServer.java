@@ -1,8 +1,10 @@
 package rcl.server;
 
+import org.w3c.dom.Document;
 import rcl.core.RCLProtocol;
 import rcl.core.RCLUser;
 import rcl.core.exceptions.UserNotFoundException;
+import rcl.core.xml.XMLUtil;
 
 import java.io.BufferedReader;
 import java.io.IOException;
@@ -120,19 +122,22 @@ public class RCLServer {
             // Check user and trying to make RCL session
             while ( !isAuthorized && !client.isClosed()) {
 
+                StringBuilder request = new StringBuilder();
                 // Read line with client name and password
-                if ( (clientOutBuffer = in.readLine()) == null ) {
-                    break;
+                while ( !(clientOutBuffer = in.readLine()).equals("EOT") ) {
+                    request.append(clientOutBuffer);
+                    request.append('\n');
                 }
 
                 try {
-                    RCLUser user = checkAuthority(clientOutBuffer);
+                    RCLUser user = checkAuthority(request.toString());
 
                     RCLProtocol proto = new RCLProtocol(user);
                     proto.connectTo(client.getOutputStream());
 
-                    out.println("Hello, " + user.getUsername() + "! Last log on "
-                            + user.getLastSession() + ".");
+                    out.println(XMLUtil.makeResponse(
+                            String.format("Hello, " + user.getUsername() + "! Last log on "
+                            + user.getLastSession() + ".")));
                     out.println("EOT");
 
                     System.out.println(user.getUsername() + " just login");
@@ -140,21 +145,37 @@ public class RCLServer {
 
                     user.setLastSession(new Date());
 
-                    while ((clientInBuffer = in.readLine()) != null) {
-                        if ( clientInBuffer.equals("disconnect") ) {
+                    Document doc = null;
+                    String methodName;
+                    ArrayList<String> params;
+
+                    while ( true ) {
+                        request = new StringBuilder();
+                        while (!(clientInBuffer = in.readLine()).equals("EOT")) {
+                            request.append(clientInBuffer);
+                            request.append('\n');
+                        }
+
+                        doc = XMLUtil.fromXML(request.toString());
+                        methodName = XMLUtil.getFunctionName(doc);
+
+                        if (methodName.equals("rcl.disconnect")) {
                             client.close();
                             System.out.printf("rcl: %s has just disconnected!\n", client.getInetAddress());
                             return;
                         }
-                        proto.processInput(clientInBuffer);
-                    }
 
-                    if ( client.isClosed() ) {
-                        System.out.printf("rcl: %s has just disconnected!\n", client.getInetAddress());
-                        return;
+                        params = XMLUtil.getParams(doc);
+                        proto.processInput(methodName, params);
+
+                        if (client.isClosed()) {
+                            System.out.printf("rcl: %s has just disconnected!\n", client.getInetAddress());
+                            return;
+                        }
                     }
                 } catch (Exception e) {
-                    out.println(String.format("rcl error: (%s)", e.getMessage()));
+                    out.println(XMLUtil.makeResponse(
+                            String.format("rcl error: (%s)", e.getMessage())));
                     out.println("EOT");
                 }
             }
@@ -189,19 +210,26 @@ public class RCLServer {
             loadUsers();
         }
 
-        String[] userAuthority = authority.split(" ");
+        Document doc = XMLUtil.fromXML(authority);
 
-        if ( userAuthority.length < 2 ) {
+        if ( doc == null ||
+             !XMLUtil.getFunctionName(doc).equals("rcl.authorize") ) {
             throw new Exception("Wrong authority format!");
         }
 
-        RCLUser user = users.get(userAuthority[0]);
+        ArrayList<String> params = XMLUtil.getParams(doc);
 
-        if ( user == null ) {
-            throw new UserNotFoundException(userAuthority[0]);
+        if ( params.size() < 2 ) {
+            throw new Exception("Wrong authority format!");
         }
 
-        if ( !user.comparePassword(userAuthority[1]) ) {
+        RCLUser user = users.get(params.get(0));
+
+        if ( user == null ) {
+            throw new UserNotFoundException(params.get(0));
+        }
+
+        if ( !user.comparePassword(params.get(1)) ) {
             throw new Exception("Wrong password!");
         }
 

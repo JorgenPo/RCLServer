@@ -1,15 +1,13 @@
 package rcl.core;
 
 import rcl.core.exceptions.MethodNotFoundException;
+import rcl.core.xml.XMLUtil;
 
 import java.io.*;
 import java.rmi.NoSuchObjectException;
 import java.sql.Time;
 import java.time.LocalDateTime;
-import java.util.Date;
-import java.util.HashMap;
-import java.util.List;
-import java.util.Map;
+import java.util.*;
 import java.util.concurrent.Exchanger;
 
 public class RCLProtocol {
@@ -40,9 +38,9 @@ public class RCLProtocol {
     }
 
     // Execute cmd and
-    public void processInput(String input) {
-        cmd.exec(input.trim());
-        userOut.println("EOT");
+    public void processInput(String methodName, ArrayList<String> params) {
+
+        cmd.exec(methodName, params);
     }
 }
 
@@ -54,39 +52,41 @@ class RCLCommands {
     private Map<String, String> descriptions;
     private PrintWriter out;
     private RCLUser user;
-    private String args;
+    private ArrayList<String> args;
+    private StringBuilder result;
 
     // Init static functions
     private void initFunctions() {
+        result = new StringBuilder();
         functions = new HashMap<>();
         descriptions = new HashMap<>();
 
-        functions.put("hello", () -> out.println("==> Hello! I'm RCL, what is your name?"));
+        functions.put("hello", () -> result.append("==> Hello! I'm RCL, what is your name?\n"));
         descriptions.put("hello", "An interesting short conversation with a rcl shell...");
 
         functions.put("help", () -> {
-            out.println("== RCLcmd - simple command shell v0.1a ==");
-            out.println(" For list of commands type 'list'.");
-            out.println(" For command help print rman <cmd>.");
-            out.println("");
-            out.println(" Program currently in beta, don't be strict to it :)");
+            result.append("== RCLcmd - simple command shell v0.1a ==\n");
+            result.append(" For list of commands type 'list'.\n");
+            result.append(" For command help print rman <cmd>.\n");
+            result.append("\n");
+            result.append(" Program currently in beta, don't be strict to it :)\n");
         });
         descriptions.put("help", "Type this if you are confused");
 
         functions.put("list", () -> {
-            out.println("== List of commands: ==");
+            result.append("== List of commands: ==");
 
             //noinspection CodeBlock2Expr
             functions.keySet().forEach((name) -> {
-                out.printf("%-10s:  %s\n", name, descriptions.get(name));
+                result.append(String.format("%-10s:  %s\n", name, descriptions.get(name)));
             });
         });
         descriptions.put("list", "Displays complete list of commands in shell");
 
-        functions.put("version", () -> out.println("RCL shell version: " + RCL_SHELL_VERSION));
+        functions.put("version", () -> result.append("RCL shell version: " + RCL_SHELL_VERSION));
         descriptions.put("version", "Displays the rcl shell version.");
 
-        functions.put("time", () -> out.println("Current server time: " + LocalDateTime.now()));
+        functions.put("time", () -> result.append("Current server time: " + LocalDateTime.now()));
         descriptions.put("time", "Displays the current server time.");
 
         functions.put("ls", () -> {
@@ -100,10 +100,10 @@ class RCLCommands {
         descriptions.put("view", "View file content");
 
         functions.put("account", () -> {
-            out.println("== Account information: ==");
-            out.println(" Username:       " + user.getUsername());
-            out.println(" Last access:    " + user.getLastSession());
-            out.println(" Favorite shell: " + "RCL shell <3");
+            result.append("== Account information: ==\n");
+            result.append(" Username:       " + user.getUsername() + "\n");
+            result.append(" Last access:    " + user.getLastSession() + "\n");
+            result.append(" Favorite shell: " + "RCL shell <3\n");
         });
         descriptions.put("account", "Prints account information");
 
@@ -117,32 +117,41 @@ class RCLCommands {
         initFunctions();
     }
 
-    public void exec(String cmd) {
-        String parts[] = cmd.split(" ");
+    public void exec(String method, ArrayList<String> params) {
 
         try {
-            if ( parts.length > 1 ) {
-                args = cmd.substring(cmd.indexOf(" "));
+            if ( params.size() > 0 ) {
+                args = params;
             } else {
-                args = "";
+                args = new ArrayList<>();
             }
 
-            Runnable f = functions.get(parts[0]);
+            Runnable f = functions.get(method);
             if ( f == null ) {
-                throw new MethodNotFoundException(cmd);
+                throw new MethodNotFoundException(method);
             }
 
             f.run();
+            out.println(XMLUtil.makeResponse(result.toString()));
+            out.println("EOT");
+            result = new StringBuilder();
+
         } catch (MethodNotFoundException e) {
-            out.println("cmd: " + e.getMessage());
+            out.println(XMLUtil.makeResponse("cmd: " + e.getMessage()));
+            out.println("EOT");
         }
     }
 
     public void execNative(String cmd) {
         try {
+            StringBuilder builder = new StringBuilder(cmd);
             if ( !args.isEmpty() ) {
-                cmd += args;
+                for ( int i = 0; i < args.size(); i++ ) {
+                    builder.append(" " + args.get(i));
+                }
             }
+
+            cmd = builder.toString();
 
             Process proc = Runtime.getRuntime().exec(cmd);
 
@@ -151,14 +160,13 @@ class RCLCommands {
 
             String line;
             while ( (line = reader.readLine()) != null ) {
-                out.println(line);
+                result.append(line + "\n");
             }
 
             reader.close();
             proc.waitFor();
         } catch (Exception e) {
-            out.println(e.getMessage());
-            out.println(e.getMessage());
+            out.println(e.getMessage() + "\n");
         }
     }
 }
